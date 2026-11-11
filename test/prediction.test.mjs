@@ -1,0 +1,12 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {Game,DT} from '../game.mjs';
+import {Predictor,STEP} from '../public/movement.js';
+function setup(){const g=new Game('ABCDEF12'),a=g.join('A'),b=g.join('B');for(const p of [a,b]){p.connected=true;p.ready=true;}g.start(a);g.enemies=[];a.x=1600;a.y=400;return {g,a,b};}
+test('movement starts before any server response; replay converges under 150ms one-way delay',()=>{const {g,a}=setup(),pred=new Predictor();pred.reconcile(a,g.map,g.scenery);const delayed=[],states=[];let maxError=0;
+for(let frame=0;frame<240;frame++){const c=pred.step({aimX:1750,aimY:400,move:frame<60,attack:false,actions:[]},g.map,g.scenery);if(frame===0){assert.ok(pred.player.x>a.x);assert.equal(a.x,1600);}delayed.push({due:frame+9,c});while(delayed[0]?.due<=frame)g.enqueue(a,[delayed.shift().c]);g.tick();states.push({due:frame+9,p:structuredClone(g.snapshot().players[0])});while(states[0]?.due<=frame){const old=pred.player.x;pred.reconcile(states.shift().p,g.map,g.scenery);maxError=Math.max(maxError,Math.abs(old-pred.player.x));}}
+assert.ok(maxError<6,`correction ${maxError}`);assert.ok(Math.abs(pred.player.x-a.x)<.001);assert.equal(pred.player.y,a.y);});
+test('duplicate input cannot move twice; queued movement is bounded by elapsed simulation time',()=>{const {g,a}=setup();const c={seq:1,aimX:1750,aimY:400,move:true,actions:[]};g.enqueue(a,[c,c]);assert.equal(a.queue.length,1);for(let seq=2;seq<=120;seq++)g.enqueue(a,[{...c,seq}]);const x=a.x;g.tick();assert.ok(a.x-x<=156*STEP+.001);assert.equal(a.ack,1);});
+test('prediction and server share scenery collision and dash movement',()=>{const {g,a}=setup(),pred=new Predictor();pred.reconcile(a,g.map,g.scenery);for(let i=0;i<40;i++){const c=pred.step({aimX:1800,aimY:400,move:false,attack:false,actions:i===0?['q']:[]},g.map,g.scenery);g.enqueue(a,[c]);g.tick();assert.ok(Math.abs(a.x-pred.player.x)<.001);assert.ok(Math.abs(a.y-pred.player.y)<.001);}});
+test('death drains pending input without replaying old movement on respawn',()=>{const {g,a}=setup();a.hp=0;a.respawn=5;for(let seq=1;seq<=310;seq++){g.enqueue(a,[{seq,aimX:2400,aimY:400,move:false,actions:[]}]);g.tick();}assert.equal(a.hp,a.maxHp);assert.ok(a.queue.length<3);assert.equal(a.ack,310);});
+test('ability effects expire even when the player tab stops sending input',()=>{const {g,a}=setup();a.spin=.3;a.aura=.5;a.lastSeen=Date.now()-2000;for(let i=0;i<60;i++)g.tick();assert.equal(a.spin,0);assert.equal(a.aura,0);});
